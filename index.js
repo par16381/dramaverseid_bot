@@ -519,7 +519,7 @@ function isAllowed(userId) {
 
 function makeShareLink(code) {
   if (LANDING_URL) {
-    return `${LANDING_URL}?code=${code}`;
+    return `${LANDING_URL}/${code}`;
   }
   return `https://t.me/${BOT_USERNAME}?start=${code}`;
 }
