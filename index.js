@@ -721,7 +721,7 @@ app.get("/linkinfo", async (req, res) => {
     const fileCount = linkData.type === "multi" ? linkData.ids.length : 1;
     const title     = await getLinkTitle(code);
 
-    return res.json({ ok: true, fileCount, type: linkData.type, title: title || "" });
+    return res.json({ ok: true, fileCount, type: linkData.type, title: title || "", views: linkData.download_count || 0 });
   } catch (err) {
     console.error("[LINKINFO] Error:", err.message);
     return res.json({ ok: false, error: "Terjadi kesalahan server." });
@@ -946,7 +946,7 @@ app.get("/dashboard/link-chart", async (req, res) => {
       if (ownerCheck.rows.length === 0) {
         return res.json({ ok: false, error: "Link tidak ditemukan." });
       }
-      if (ownerCheck.rows[0].owner_id !== userId) {
+      if (Number(ownerCheck.rows[0].owner_id) !== Number(userId)) {
         return res.status(403).json({ ok: false, error: "Akses ditolak." });
       }
     }
