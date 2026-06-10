@@ -1529,8 +1529,9 @@ bot.onText(/\/settitle(?:\s+(\S+))?(?:\s+(.+))?/, async (msg, match) => {
     return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
   }
 
-  const isAdmin = ADMIN_IDS.includes(userId);
-  if (raw.owner_id !== userId && !isAdmin) {
+  const isAdmin     = ADMIN_IDS.includes(userId);
+  const isWhitelist = WHITELIST_USERS.includes(userId);
+  if (raw.owner_id !== userId && !isAdmin && !isWhitelist) {
     return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengubah judul link ini.");
   }
 
