@@ -147,8 +147,9 @@ async function canEditLink(code, userId) {
   );
   if (result.rows.length === 0) return "not_found";
   const isAdmin = ADMIN_IDS.includes(userId);
+  const isWhitelist = WHITELIST_USERS.includes(userId);
   const isOwner = result.rows[0].owner_id === userId;
-  if (!isAdmin && !isOwner) return "forbidden";
+  if (!isAdmin && !isWhitelist && !isOwner) return "forbidden";
   return "ok";
 }
 
@@ -280,7 +281,8 @@ async function deleteLink(code, ownerId) {
   if (result.rows.length === 0) return "not_found";
 
   const isAdmin = ADMIN_IDS.includes(ownerId);
-  if (result.rows[0].owner_id !== ownerId && !isAdmin) return "forbidden";
+  const isWhitelist = WHITELIST_USERS.includes(ownerId);
+  if (result.rows[0].owner_id !== ownerId && !isAdmin && !isWhitelist) return "forbidden";
 
   await pool.query("DELETE FROM links WHERE code = $1", [code]);
   return "deleted";
