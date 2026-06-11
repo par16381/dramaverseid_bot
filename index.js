@@ -814,14 +814,14 @@ app.get("/dashboard/chart", async (req, res) => {
     } else {
       // Whitelist: hanya claim pada link milik user ini
       const result = await pool.query(
-        `SELECT DATE(s.created_at) as date, COUNT(*) as views
+        `SELECT DATE(s.created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
          FROM ad_sessions s
          JOIN links l ON l.code = s.code
          WHERE s.verified = TRUE
            AND l.owner_id = $1
            AND DATE(s.created_at) >= $2
            AND DATE(s.created_at) <= $3
-         GROUP BY DATE(s.created_at)
+         GROUP BY DATE(s.created_at AT TIME ZONE 'Asia/Jakarta')
          ORDER BY date ASC`,
         [userId, dateFrom, dateTo]
       );
@@ -955,9 +955,10 @@ app.get("/dashboard/link-chart", async (req, res) => {
     const result = await pool.query(
       `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
        FROM ad_sessions
-       WHERE verified = TRUE
-         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') >= $1
-         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') <= $2
+       WHERE code = $1
+         AND verified = TRUE
+         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') >= $2
+         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') <= $3
        GROUP BY DATE(created_at AT TIME ZONE 'Asia/Jakarta')
        ORDER BY date ASC`,
       [code, dateFrom, dateTo]
