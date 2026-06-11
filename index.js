@@ -801,12 +801,12 @@ app.get("/dashboard/chart", async (req, res) => {
     if (isAdmin) {
       // Admin: semua claim dalam rentang
       const result = await pool.query(
-        `SELECT DATE(created_at) as date, COUNT(*) as views
+        `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
          FROM ad_sessions
          WHERE verified = TRUE
-           AND DATE(created_at) >= $1
-           AND DATE(created_at) <= $2
-         GROUP BY DATE(created_at)
+           AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') >= $1
+           AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') <= $2
+         GROUP BY DATE(created_at AT TIME ZONE 'Asia/Jakarta')
          ORDER BY date ASC`,
         [dateFrom, dateTo]
       );
@@ -953,13 +953,12 @@ app.get("/dashboard/link-chart", async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT DATE(created_at) as date, COUNT(*) as views
+      `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
        FROM ad_sessions
-       WHERE code = $1
-         AND verified = TRUE
-         AND DATE(created_at) >= $2
-         AND DATE(created_at) <= $3
-       GROUP BY DATE(created_at)
+       WHERE verified = TRUE
+         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') >= $1
+         AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') <= $2
+       GROUP BY DATE(created_at AT TIME ZONE 'Asia/Jakarta')
        ORDER BY date ASC`,
       [code, dateFrom, dateTo]
     );
