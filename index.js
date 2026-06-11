@@ -2206,13 +2206,17 @@ initDB()
     // ── Cleanup job: hapus session & link expired setiap 1 jam ──────────────
     setInterval(async () => {
       try {
-        const r1 = await pool.query("DELETE FROM ad_sessions WHERE expires_at < NOW()");
+        // Hanya hapus session yang tidak selesai (belum verified & sudah expired)
+        const r1 = await pool.query(
+          "DELETE FROM ad_sessions WHERE expires_at < NOW() AND verified = FALSE"
+        );
+        // Hapus link expired
         const r2 = await pool.query(
           "DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at < NOW()"
         );
         const n1 = r1.rowCount, n2 = r2.rowCount;
         if (n1 > 0 || n2 > 0) {
-          console.log(`[CLEANUP] Hapus ${n1} session & ${n2} link expired`);
+          console.log(`[CLEANUP] Hapus ${n1} session tidak terselesaikan & ${n2} link expired`);
         }
       } catch (err) {
         console.error("[CLEANUP] Error:", err.message);
