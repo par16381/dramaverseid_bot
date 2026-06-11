@@ -1733,8 +1733,8 @@ bot.onText(/\/multi/, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk menggunakan bot ini.");
   }
 
-  // [TITIK 4] Rate limit: max 5 sesi multi per jam per user
-  const multiLimit = checkBotLimit("multi", userId, 5, 3600);
+  // [TITIK 4] Rate limit: max 100 sesi multi per jam per user
+  const multiLimit = checkBotLimit("multi", userId, 100, 3600);
   if (!multiLimit.ok) {
     return bot.sendMessage(
       chatId,
@@ -1935,8 +1935,8 @@ bot.on("message", async (msg) => {
     );
   }
 
-  // [TITIK 5] Rate limit: max 20 upload per jam per user
-  const uploadLimit = checkBotLimit("upload", userId, 20, 3600);
+  // [TITIK 5] Rate limit: max 100 upload per jam per user
+  const uploadLimit = checkBotLimit("upload", userId, 100, 3600);
   if (!uploadLimit.ok) {
     return bot.sendMessage(
       chatId,
