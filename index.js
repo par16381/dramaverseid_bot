@@ -819,8 +819,8 @@ app.get("/dashboard/chart", async (req, res) => {
          JOIN links l ON l.code = s.code
          WHERE s.verified = TRUE
            AND l.owner_id = $1
-           AND DATE(s.created_at) >= $2
-           AND DATE(s.created_at) <= $3
+           AND DATE(s.created_at AT TIME ZONE 'Asia/Jakarta') >= $2
+           AND DATE(s.created_at AT TIME ZONE 'Asia/Jakarta') <= $3
          GROUP BY DATE(s.created_at AT TIME ZONE 'Asia/Jakarta')
          ORDER BY date ASC`,
         [userId, dateFrom, dateTo]
