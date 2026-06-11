@@ -801,7 +801,7 @@ app.get("/dashboard/chart", async (req, res) => {
     if (isAdmin) {
       // Admin: semua claim dalam rentang
       const result = await pool.query(
-        `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
+        `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta')::text as date, COUNT(*) as views
          FROM ad_sessions
          WHERE verified = TRUE
            AND DATE(created_at AT TIME ZONE 'Asia/Jakarta') >= $1
@@ -814,7 +814,7 @@ app.get("/dashboard/chart", async (req, res) => {
     } else {
       // Whitelist: hanya claim pada link milik user ini
       const result = await pool.query(
-        `SELECT DATE(s.created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
+        `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta')::text as date, COUNT(*) as views
          FROM ad_sessions s
          JOIN links l ON l.code = s.code
          WHERE s.verified = TRUE
@@ -953,7 +953,7 @@ app.get("/dashboard/link-chart", async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta') as date, COUNT(*) as views
+      `SELECT DATE(created_at AT TIME ZONE 'Asia/Jakarta')::text as date, COUNT(*) as views
        FROM ad_sessions
        WHERE code = $1
          AND verified = TRUE
