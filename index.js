@@ -532,6 +532,7 @@ function getMediaType(msg) {
   if (msg.voice)      return "voice";
   if (msg.video_note) return "video_note";
   if (msg.animation)  return "animation";
+  if (msg.sticker)    return "sticker";
   return null;
 }
 
@@ -1945,6 +1946,7 @@ bot.on("message", async (msg) => {
   const mediaEmoji = {
     photo: "🖼", video: "🎬", document: "📄",
     audio: "🎵", voice: "🎤", video_note: "📹", animation: "🎞",
+    sticker: "🎭",
   };
   const emoji = mediaEmoji[mediaType] || "📁";
 
@@ -2136,6 +2138,7 @@ bot.on("message", async (msg) => {
       msg.document?.file_name ||
       msg.audio?.title ||
       msg.audio?.file_name ||
+      (msg.sticker?.emoji ? `Sticker ${msg.sticker.emoji}` : null) ||
       (mediaType.charAt(0).toUpperCase() + mediaType.slice(1));
 
     // Simpan title default dari nama file
