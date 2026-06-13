@@ -51,13 +51,11 @@ async function initDB() {
     )
   `);
 
-  // Index agar query session lebih cepat
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ad_sessions_code_user
     ON ad_sessions (code, user_id)
   `).catch(() => {});
 
-  // Tabel blacklist user
   await pool.query(`
     CREATE TABLE IF NOT EXISTS blocked_users (
       user_id    BIGINT PRIMARY KEY,
@@ -81,9 +79,7 @@ async function isBlacklisted(userId) {
 }
 
 async function banUser(targetId, adminId, reason) {
-  // Admin tidak bisa di-ban
   if (ADMIN_IDS.includes(targetId)) return "is_admin";
-
   await pool.query(
     `INSERT INTO blocked_users (user_id, reason, banned_by)
      VALUES ($1, $2, $3)
@@ -139,21 +135,19 @@ async function getLinkTitle(code) {
 
 // ─── EDIT LINK HELPERS ─────────────────────────────────────────────────────
 
-// Cek apakah user boleh mengedit link (owner atau admin)
 async function canEditLink(code, userId) {
   const result = await pool.query(
     "SELECT owner_id FROM links WHERE code = $1",
     [code]
   );
   if (result.rows.length === 0) return "not_found";
-  const isAdmin = ADMIN_IDS.includes(userId);
+  const isAdmin     = ADMIN_IDS.includes(userId);
   const isWhitelist = WHITELIST_USERS.includes(userId);
-  const isOwner = result.rows[0].owner_id === userId;
+  const isOwner     = result.rows[0].owner_id === userId;
   if (!isAdmin && !isWhitelist && !isOwner) return "forbidden";
   return "ok";
 }
 
-// Ambil data link mentah (tanpa cek expiry) untuk keperluan edit
 async function getRawLink(code) {
   const result = await pool.query(
     "SELECT data, type, owner_id, expires_at FROM links WHERE code = $1",
@@ -163,7 +157,6 @@ async function getRawLink(code) {
   return result.rows[0];
 }
 
-// Tambah file ke link — jika single jadi multi, jika multi append
 async function addFileToLink(code, newStoredId) {
   const raw = await getRawLink(code);
   if (!raw) return "not_found";
@@ -183,26 +176,21 @@ async function addFileToLink(code, newStoredId) {
   return ids.length;
 }
 
-// Hapus beberapa file sekaligus dari link berdasarkan nomor urut (1-based)
-// indexes = array of number, misal [1, 3]
 async function removeFileFromLink(code, indexes) {
   const raw = await getRawLink(code);
   if (!raw) return { status: "not_found" };
 
   let ids = raw.type === "single" ? [raw.data.id] : [...raw.data.ids];
 
-  // Validasi semua index
   const invalid = indexes.filter(i => i < 1 || i > ids.length);
   if (invalid.length > 0) {
     return { status: "out_of_range", total: ids.length, invalid };
   }
 
-  // Cek apakah akan jadi kosong
   if (indexes.length >= ids.length) {
     return { status: "empty" };
   }
 
-  // Hapus dari belakang agar index tidak bergeser
   const sortedDesc = [...new Set(indexes)].sort((a, b) => b - a);
   sortedDesc.forEach(i => ids.splice(i - 1, 1));
 
@@ -280,7 +268,7 @@ async function deleteLink(code, ownerId) {
   );
   if (result.rows.length === 0) return "not_found";
 
-  const isAdmin = ADMIN_IDS.includes(ownerId);
+  const isAdmin     = ADMIN_IDS.includes(ownerId);
   const isWhitelist = WHITELIST_USERS.includes(ownerId);
   if (result.rows[0].owner_id !== ownerId && !isAdmin && !isWhitelist) return "forbidden";
 
@@ -348,9 +336,6 @@ if (!WEBAPP_URL || !WEBAPP_BACKEND_URL) {
 }
 
 // ─── VALIDASI initData TELEGRAM WEBAPP ────────────────────────────────────
-// Dipindah ke sini agar BOT_TOKEN sudah terdefinisi saat fungsi dieksekusi.
-// Dokumen resmi: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
-
 function verifyTelegramInitData(initData) {
   try {
     if (!initData || typeof initData !== "string") return null;
@@ -361,7 +346,6 @@ function verifyTelegramInitData(initData) {
 
     if (!hash || !authDate) return null;
 
-    // Tolak initData yang sudah lebih dari 1 jam (3600 detik)
     const MAX_AGE_SECONDS = 3600;
     const ageSecs         = Math.floor(Date.now() / 1000) - authDate;
     if (ageSecs > MAX_AGE_SECONDS) {
@@ -369,14 +353,12 @@ function verifyTelegramInitData(initData) {
       return null;
     }
 
-    // Susun data-check-string: semua field kecuali hash, urut alfabet, pisah \n
     params.delete("hash");
     const dataCheckString = Array.from(params.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");
 
-    // Secret key = HMAC-SHA256("WebAppData", BOT_TOKEN)
     const secretKey = crypto
       .createHmac("sha256", "WebAppData")
       .update(BOT_TOKEN)
@@ -395,7 +377,7 @@ function verifyTelegramInitData(initData) {
     const userRaw = params.get("user");
     if (!userRaw) return null;
 
-    return JSON.parse(userRaw); // { id, first_name, username, ... }
+    return JSON.parse(userRaw);
 
   } catch (err) {
     console.error("[INITDATA] Error validasi:", err.message);
@@ -427,9 +409,7 @@ function requireValidInitData(req, res, next) {
   next();
 }
 
-// ─── BOT INIT dengan auto-retry saat 409 Conflict ─────────────────────────
-// Railway rolling deploy menyebabkan 2 container jalan bersamaan sementara.
-// Solusi: mulai polling: false dulu, lalu panggil startPolling() di initDB.
+// ─── BOT INIT ─────────────────────────────────────────────────────────────
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
 let isPolling = false;
@@ -437,7 +417,6 @@ let isPolling = false;
 async function startPolling() {
   if (isPolling) return;
   try {
-    // Bersihkan pending updates sebelum mulai
     await bot.getUpdates({ offset: -1, limit: 1, timeout: 0 });
     await bot.startPolling({ restart: false });
     isPolling = true;
@@ -450,18 +429,17 @@ async function startPolling() {
 }
 
 // ─── IN-MEMORY STORE ───────────────────────────────────────────────────────
-const multiMode = new Map();
-// editMode menyimpan state sementara saat user sedang dalam sesi edit
-// Map<userId, { action: "replace"|"add", code: string }>
-const editMode = new Map();
+const multiMode   = new Map();
+const editMode    = new Map();
+// commandMode: sesi interaktif untuk perintah step-by-step
+// Map<userId, { command, step, code?, _timeout }>
+const commandMode = new Map();
 
-// ─── TIMEOUT HELPER untuk multiMode & editMode ────────────────────────────
-// Sesi yang tidak selesai dalam 30 menit otomatis dibatalkan
-// agar Map tidak menumpuk di memory selamanya
+// ─── TIMEOUT HELPERS ───────────────────────────────────────────────────────
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 menit
+const COMMAND_TIMEOUT_MS =  5 * 60 * 1000; //  5 menit
 
 function setMultiModeWithTimeout(userId, chatId, data) {
-  // Hapus timeout lama jika ada
   if (multiMode.has(userId) && multiMode.get(userId)._timeout) {
     clearTimeout(multiMode.get(userId)._timeout);
   }
@@ -469,10 +447,7 @@ function setMultiModeWithTimeout(userId, chatId, data) {
     if (multiMode.has(userId)) {
       multiMode.delete(userId);
       try {
-        await bot.sendMessage(
-          chatId,
-          "⏰ Sesi multi file otomatis dibatalkan karena tidak ada aktivitas selama 30 menit."
-        );
+        await bot.sendMessage(chatId, "⏰ Sesi multi file otomatis dibatalkan karena tidak ada aktivitas selama 30 menit.");
       } catch (_) {}
     }
   }, SESSION_TIMEOUT_MS);
@@ -487,14 +462,26 @@ function setEditModeWithTimeout(userId, chatId, data) {
     if (editMode.has(userId)) {
       editMode.delete(userId);
       try {
-        await bot.sendMessage(
-          chatId,
-          "⏰ Sesi edit otomatis dibatalkan karena tidak ada aktivitas selama 30 menit."
-        );
+        await bot.sendMessage(chatId, "⏰ Sesi edit otomatis dibatalkan karena tidak ada aktivitas selama 30 menit.");
       } catch (_) {}
     }
   }, SESSION_TIMEOUT_MS);
   editMode.set(userId, { ...data, _timeout: timeout });
+}
+
+function setCommandModeWithTimeout(userId, chatId, data) {
+  if (commandMode.has(userId) && commandMode.get(userId)._timeout) {
+    clearTimeout(commandMode.get(userId)._timeout);
+  }
+  const timeout = setTimeout(async () => {
+    if (commandMode.has(userId)) {
+      commandMode.delete(userId);
+      try {
+        await bot.sendMessage(chatId, "⏰ Sesi perintah otomatis dibatalkan karena tidak ada aktivitas selama 5 menit.");
+      } catch (_) {}
+    }
+  }, COMMAND_TIMEOUT_MS);
+  commandMode.set(userId, { ...data, _timeout: timeout });
 }
 
 function deleteMultiMode(userId) {
@@ -513,10 +500,22 @@ function deleteEditMode(userId) {
   }
 }
 
+function deleteCommandMode(userId) {
+  if (commandMode.has(userId)) {
+    const s = commandMode.get(userId);
+    if (s._timeout) clearTimeout(s._timeout);
+    commandMode.delete(userId);
+  }
+}
+
 // ─── HELPER ────────────────────────────────────────────────────────────────
 function isAllowed(userId) {
   if (WHITELIST_USERS.length === 0) return true;
   return WHITELIST_USERS.includes(userId) || ADMIN_IDS.includes(userId);
+}
+
+function isAllowedToEdit(userId) {
+  return ADMIN_IDS.includes(userId) || WHITELIST_USERS.includes(userId);
 }
 
 function makeShareLink(code) {
@@ -559,9 +558,6 @@ function formatExpiry(expiresAt) {
   return `⏳ ${hours} jam lagi`;
 }
 
-// ─── FIX: Helper buat session baru ─────────────────────────────────────────
-// Dipanggil setiap kali user buka /start dengan code
-// Selalu insert baru — tidak pakai ON CONFLICT agar tidak miss
 async function createSession(code, userId) {
   try {
     await pool.query(
@@ -577,6 +573,32 @@ async function createSession(code, userId) {
   }
 }
 
+// ─── HELPER: render linkdetail text ────────────────────────────────────────
+async function buildLinkDetailText(code) {
+  const raw      = await getRawLink(code);
+  if (!raw) return null;
+  const linkData = await getLink(code);
+  const ids      = raw.type === "single" ? [raw.data.id] : raw.data.ids;
+  const expired  = linkData?.expired ? "⛔ Sudah expired" : "✅ Aktif";
+  const title    = await getLinkTitle(code);
+
+  let text = `🔍 *Detail Link* \`${code}\`\n`;
+  text += `━━━━━━━━━━━━━━━━\n`;
+  if (title) text += `🏷️ Judul: *${title}*\n`;
+  text += `📦 Tipe: ${raw.type === "single" ? "Single" : "Multi"}\n`;
+  text += `📄 Jumlah file: *${ids.length}*\n`;
+  text += `⬇️ Download: *${linkData?.download_count ?? 0}x*\n`;
+  text += `🔴 Status: ${expired}\n`;
+  text += `⏳ Expired: ${formatExpiry(raw.expires_at)}\n\n`;
+  text += `*Daftar File:*\n`;
+  ids.forEach((id, i) => {
+    text += `  *${i + 1}.* Message ID \`${id}\`\n`;
+  });
+  text += `\n_Edit: /replace, /addfile, /removefile_`;
+  if (title) text += `\n_Ubah judul: /settitle_`;
+  return text;
+}
+
 // ─── HTTP: /botinfo ────────────────────────────────────────────────────────
 app.get("/botinfo", (req, res) => {
   res.json({
@@ -589,8 +611,6 @@ app.get("/botinfo", (req, res) => {
 });
 
 // ─── HTTP: /claim ──────────────────────────────────────────────────────────
-// [TITIK 1] Rate limit: max 5 request per menit per user
-// [VALIDASI] initData Telegram diverifikasi HMAC-SHA256 sebelum masuk handler
 app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req, res) => {
   const { code, user_id } = req.body;
 
@@ -598,18 +618,14 @@ app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req
     return res.json({ ok: false, error: "Parameter tidak lengkap." });
   }
 
-  // Jika initData valid → pakai userId terverifikasi dari Telegram
-  // Jika tidak ada initData (fallback) → pakai user_id dari body
   const userId = req.verifiedUserId || parseInt(user_id);
 
-  // Cek blacklist sebelum proses apapun
   if (await isBlacklisted(userId)) {
     console.warn(`[CLAIM] Ditolak — user ${userId} ada di blacklist`);
     return res.json({ ok: false, error: "Akun kamu telah diblokir dari bot ini." });
   }
 
   try {
-    // Ambil session terbaru yang belum verified dan belum expired
     const sessionResult = await pool.query(
       `SELECT id FROM ad_sessions
        WHERE code = $1
@@ -622,7 +638,6 @@ app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req
     );
 
     if (sessionResult.rows.length === 0) {
-      // Cek apakah sudah pernah verified (sudah diambil)
       const verifiedCheck = await pool.query(
         `SELECT id FROM ad_sessions
          WHERE code = $1 AND user_id = $2 AND verified = TRUE
@@ -637,13 +652,11 @@ app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req
       return res.json({ ok: false, error: "Session tidak ditemukan atau kadaluarsa. Silakan buka ulang link dari awal." });
     }
 
-    // Tandai session verified
     await pool.query(
       `UPDATE ad_sessions SET verified = TRUE WHERE id = $1`,
       [sessionResult.rows[0].id]
     );
 
-    // Ambil data link
     const linkData = await getLink(code);
     if (!linkData) {
       return res.json({ ok: false, error: "Link tidak ditemukan." });
@@ -652,7 +665,6 @@ app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req
       return res.json({ ok: false, error: "Link sudah kadaluarsa." });
     }
 
-    // Kirim file ke user
     if (linkData.type === "multi") {
       for (const id of linkData.ids) {
         await sendFromStorage(userId, id);
@@ -672,8 +684,6 @@ app.post("/claim", httpLimiter("claim", 5, 60), requireValidInitData, async (req
 });
 
 // ─── HTTP: /session ────────────────────────────────────────────────────────
-// Dipanggil oleh landing page sebelum redirect ke bot
-// [TITIK 2] Rate limit: max 10 request per menit per user
 app.post("/session", httpLimiter("session", 10, 60), async (req, res) => {
   const { code, user_id } = req.body;
 
@@ -735,13 +745,11 @@ app.get("/linkinfo", async (req, res) => {
 app.get("/", (req, res) => res.json({ status: "ok", bot: BOT_USERNAME }));
 
 // ─── HTTP: /dashboard/summary ──────────────────────────────────────────────
-// Ringkasan global (admin) atau milik sendiri (whitelist user)
-// Query param: user_id (wajib), init_data (opsional untuk verifikasi)
 app.get("/dashboard/summary", async (req, res) => {
   const userId = parseInt(req.query.user_id);
   if (!userId) return res.json({ ok: false, error: "Parameter user_id tidak lengkap." });
 
-  const isAdmin    = ADMIN_IDS.includes(userId);
+  const isAdmin     = ADMIN_IDS.includes(userId);
   const isWhitelist = WHITELIST_USERS.includes(userId);
   if (!isAdmin && !isWhitelist) {
     return res.status(403).json({ ok: false, error: "Akses ditolak." });
@@ -749,8 +757,8 @@ app.get("/dashboard/summary", async (req, res) => {
 
   try {
     if (isAdmin) {
-      const totalLinks = await pool.query("SELECT COUNT(*) FROM links");
-      const totalViews = await pool.query("SELECT COALESCE(SUM(download_count),0) as total FROM links");
+      const totalLinks  = await pool.query("SELECT COUNT(*) FROM links");
+      const totalViews  = await pool.query("SELECT COALESCE(SUM(download_count),0) as total FROM links");
       const totalBanned = await pool.query("SELECT COUNT(*) FROM blocked_users");
       return res.json({
         ok: true,
@@ -780,9 +788,6 @@ app.get("/dashboard/summary", async (req, res) => {
 });
 
 // ─── HTTP: /dashboard/chart ────────────────────────────────────────────────
-// Statistik views per hari dalam rentang tanggal
-// Query param: user_id, date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)
-// Cara kerja: hitung dari ad_sessions yang verified=TRUE dalam rentang
 app.get("/dashboard/chart", async (req, res) => {
   const userId   = parseInt(req.query.user_id);
   const dateFrom = req.query.date_from;
@@ -801,7 +806,6 @@ app.get("/dashboard/chart", async (req, res) => {
   try {
     let rows;
     if (isAdmin) {
-      // Admin: semua claim dalam rentang
       const result = await pool.query(
         `SELECT DATE(created_at + INTERVAL '7 hours')::text as date, COUNT(*) as views
          FROM ad_sessions
@@ -814,7 +818,6 @@ app.get("/dashboard/chart", async (req, res) => {
       );
       rows = result.rows;
     } else {
-      // Whitelist: hanya claim pada link milik user ini
       const result = await pool.query(
         `SELECT DATE(s.created_at + INTERVAL '7 hours')::text as date, COUNT(*) as views
          FROM ad_sessions s
@@ -841,8 +844,6 @@ app.get("/dashboard/chart", async (req, res) => {
 });
 
 // ─── HTTP: /dashboard/links ────────────────────────────────────────────────
-// Daftar link dengan performa — admin lihat semua, whitelist lihat milik sendiri
-// Query param: user_id, page (default 1), limit (default 10), search (opsional)
 app.get("/dashboard/links", async (req, res) => {
   const userId = parseInt(req.query.user_id);
   const page   = Math.max(1, parseInt(req.query.page)  || 1);
@@ -878,7 +879,6 @@ app.get("/dashboard/links", async (req, res) => {
       ? `WHERE ${conditions.join(" AND ")}`
       : "";
 
-    // Order berdasarkan sort mode
     const orderClause = sort === "newest"
       ? "ORDER BY created_at DESC"
       : "ORDER BY download_count DESC, created_at DESC";
@@ -922,8 +922,6 @@ app.get("/dashboard/links", async (req, res) => {
 });
 
 // ─── HTTP: /dashboard/link-chart ──────────────────────────────────────────
-// Statistik views per hari untuk satu link spesifik
-// Query param: user_id, code, date_from, date_to
 app.get("/dashboard/link-chart", async (req, res) => {
   const userId   = parseInt(req.query.user_id);
   const code     = req.query.code;
@@ -941,7 +939,6 @@ app.get("/dashboard/link-chart", async (req, res) => {
   }
 
   try {
-    // Verifikasi kepemilikan jika bukan admin
     if (!isAdmin) {
       const ownerCheck = await pool.query(
         "SELECT owner_id FROM links WHERE code = $1", [code]
@@ -966,18 +963,17 @@ app.get("/dashboard/link-chart", async (req, res) => {
       [code, dateFrom, dateTo]
     );
 
-    // Ambil info link
     const linkInfo = await pool.query(
       "SELECT title, download_count, type FROM links WHERE code = $1", [code]
     );
 
     return res.json({
-      ok:    true,
+      ok:         true,
       code,
-      title: linkInfo.rows[0]?.title || "",
+      title:      linkInfo.rows[0]?.title || "",
       totalViews: linkInfo.rows[0]?.download_count || 0,
-      type:  linkInfo.rows[0]?.type || "single",
-      data:  result.rows.map(r => ({ date: r.date, views: parseInt(r.views) })),
+      type:       linkInfo.rows[0]?.type || "single",
+      data:       result.rows.map(r => ({ date: r.date, views: parseInt(r.views) })),
     });
   } catch (err) {
     console.error("[DASHBOARD/LINK-CHART] Error:", err.message);
@@ -991,7 +987,6 @@ bot.onText(/\/start(?:\s+(\S+))?/, async (msg, match) => {
   const userId = msg.from.id;
   const param  = match[1];
 
-  // Cek blacklist — admin tidak pernah diblokir
   if (!ADMIN_IDS.includes(userId) && await isBlacklisted(userId)) {
     return bot.sendMessage(chatId, "⛔ Akun kamu telah diblokir dari bot ini.");
   }
@@ -1013,27 +1008,18 @@ bot.onText(/\/start(?:\s+(\S+))?/, async (msg, match) => {
 
     const fileCount = linkData.type === "multi" ? linkData.ids.length : 1;
     const fileLabel = fileCount > 1 ? `${fileCount} file` : "1 file";
-
-    // Ambil judul link
     const linkTitle = await getLinkTitle(param);
 
-    // FIX: Selalu buat session baru setiap /start dengan code
     await createSession(param, userId);
 
-    // Pastikan semua env var lengkap sebelum buat WebApp URL
     if (!WEBAPP_URL || !WEBAPP_BACKEND_URL) {
-      return bot.sendMessage(
-        chatId,
-        "❌ Konfigurasi bot belum lengkap. Hubungi admin.",
-        { parse_mode: "Markdown" }
-      );
+      return bot.sendMessage(chatId, "❌ Konfigurasi bot belum lengkap. Hubungi admin.", { parse_mode: "Markdown" });
     }
 
     const titleLine = linkTitle ? `🏷️ *${linkTitle}*\n\n` : "";
     const webAppUrl = `${WEBAPP_URL}?code=${encodeURIComponent(param)}&uid=${userId}&wait=${AD_WAIT_SECONDS}&ad=${encodeURIComponent(AD_URL)}&backend=${encodeURIComponent(WEBAPP_BACKEND_URL)}&bot=${BOT_USERNAME}`;
 
     console.log(`[START] User ${userId} → code: ${param}`);
-    console.log(`[START] WebApp URL: ${webAppUrl}`);
 
     return bot.sendMessage(
       chatId,
@@ -1046,10 +1032,7 @@ bot.onText(/\/start(?:\s+(\S+))?/, async (msg, match) => {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [[
-            {
-              text: "🎁 Buka & Ambil File",
-              web_app: { url: webAppUrl }
-            }
+            { text: "🎁 Buka & Ambil File", web_app: { url: webAppUrl } }
           ]]
         }
       }
@@ -1109,59 +1092,43 @@ bot.onText(/\/help/, async (msg) => {
 
   const editSection = canEdit
     ? `\n*Perintah Edit Link:*\n` +
-      `• /replace \\[code\\] — Ganti semua file dalam link\n` +
-      `• /addfile \\[code\\] — Tambah file ke link\n` +
-      `• /removefile \\[code\\] \\[no\\] — Hapus file ke\\-N dari link\n` +
-      `• /linkdetail \\[code\\] — Detail isi link\n` +
+      `• /replace — Ganti semua file dalam link\n` +
+      `• /addfile — Tambah file ke link\n` +
+      `• /removefile — Hapus file dari link\n` +
+      `• /linkdetail — Detail isi link\n` +
       `• /canceledit — Batalkan sesi edit\n`
     : "";
 
   const adminSection = isAdmin
     ? `\n*Perintah Admin:*\n` +
-      `• /ban \\[id\\] \\[alasan\\] — Blokir user\n` +
-      `• /unban \\[id\\] — Buka blokir user\n` +
+      `• /ban [id] [alasan] — Blokir user\n` +
+      `• /unban [id] — Buka blokir user\n` +
       `• /banlist — Daftar user diblokir\n` +
-      `• /checkban \\[id\\] — Cek status ban user\n`
+      `• /checkban [id] — Cek status ban user\n`
     : "";
 
-  try {
-    await bot.sendMessage(
-      msg.chat.id,
-      `📖 *Bantuan \\- File Share Bot*\n\n` +
-      `*Perintah Upload:*\n` +
-      `• /multi — Mulai mode multi file\n` +
-      `• /done — Selesai & buat link\n` +
-      `• /cancel — Batalkan mode multi\n\n` +
-      `*Perintah Info:*\n` +
-      `• /stats — Statistik link kamu\n` +
-      `• /myid — Lihat User ID kamu\n` +
-      `• /help — Bantuan ini\n` +
-      `• /dashboard — Buka dashboard analytics\n\n` +
-      `*Perintah Kelola Link:*\n` +
-      `• /delete \\[code\\] — Hapus link\n` +
-      `  _Contoh: /delete AbCd1234_\n` +
-      `• /settitle \\[code\\] \\[judul\\] — Ubah judul link\n` +
-      `  _Contoh: /settitle AbCd1234 Judul Baru_` +
-      editSection +
-      adminSection + `\n\n` +
-      `*Cara buat link:*\n` +
-      `1\\. Kirim file langsung → link otomatis\n` +
-      `2\\. /multi → kirim beberapa file → /done`,
-      { parse_mode: "MarkdownV2" }
-    );
-  } catch (err) {
-    console.error("[HELP] Error:", err.message);
-    // Fallback: kirim tanpa markdown jika ada karakter yang bermasalah
-    await bot.sendMessage(
-      msg.chat.id,
-      `📖 Bantuan - File Share Bot\n\n` +
-      `Upload: /multi /done /cancel\n` +
-      `Info: /stats /myid /dashboard\n` +
-      `Kelola: /delete /settitle /linkdetail\n` +
-      `Edit: /replace /addfile /removefile /canceledit\n\n` +
-      `Kirim file langsung untuk upload single file.`
-    );
-  }
+  await bot.sendMessage(
+    msg.chat.id,
+    `📖 *Bantuan - File Share Bot*\n\n` +
+    `*Perintah Upload:*\n` +
+    `• /multi — Mulai mode multi file\n` +
+    `• /done — Selesai & buat link\n` +
+    `• /cancel — Batalkan mode aktif\n\n` +
+    `*Perintah Info:*\n` +
+    `• /stats — Statistik link kamu\n` +
+    `• /myid — Lihat User ID kamu\n` +
+    `• /help — Bantuan ini\n` +
+    `• /dashboard — Buka dashboard analytics\n\n` +
+    `*Perintah Kelola Link:*\n` +
+    `• /delete — Hapus link\n` +
+    `• /settitle — Ubah judul link\n` +
+    editSection +
+    adminSection + `\n` +
+    `*Cara buat link:*\n` +
+    `1. Kirim file langsung → link otomatis\n` +
+    `2. /multi → kirim beberapa file → /done`,
+    { parse_mode: "Markdown" }
+  );
 });
 
 // ─── /myid ─────────────────────────────────────────────────────────────────
@@ -1226,226 +1193,96 @@ bot.onText(/\/stats/, async (msg) => {
   }
 });
 
-// ─── /delete ───────────────────────────────────────────────────────────────
-bot.onText(/\/delete(?:\s+(\S+))?/, async (msg, match) => {
+// ─── /delete — interaktif ─────────────────────────────────────────────────
+bot.onText(/\/delete$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const code   = match[1];
 
-  // [TITIK 3] Rate limit: max 10 delete per menit per user
-  const deleteLimit = checkBotLimit("delete", userId, 10, 60);
-  if (!deleteLimit.ok) {
-    return bot.sendMessage(
-      chatId,
-      `⏳ Terlalu banyak permintaan delete. Coba lagi dalam *${formatTimeLeft(deleteLimit.retryAfter)}*`,
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  if (!code) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Sertakan kode link yang ingin dihapus.\n\n_Contoh:_ /delete AbCd1234",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const result = await deleteLink(code, userId);
-
-  const messages = {
-    deleted:   `✅ Link \`${code}\` berhasil dihapus.`,
-    not_found: `❌ Link \`${code}\` tidak ditemukan.`,
-    forbidden: `⛔ Kamu tidak memiliki izin untuk menghapus link ini.`,
-  };
-
-  await bot.sendMessage(chatId, messages[result] || "❌ Terjadi kesalahan.", {
-    parse_mode: "Markdown",
-  });
-});
-
-// ─── HELPER: cek akses edit (admin atau whitelist) ─────────────────────────
-function isAllowedToEdit(userId) {
-  return ADMIN_IDS.includes(userId) || WHITELIST_USERS.includes(userId);
-}
-
-// ─── /replace [code] ───────────────────────────────────────────────────────
-// Ganti semua file dalam link. Setelah command, user kirim file baru.
-bot.onText(/\/replace(?:\s+(\S+))?/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const code   = match[1];
-
-  if (!isAllowedToEdit(userId)) {
-    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
-  }
-
-  if (!code) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Sertakan kode link.\n\n_Contoh:_ /replace AbCd1234",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const access = await canEditLink(code, userId);
-  if (access === "not_found") return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  if (access === "forbidden")  return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengedit link ini.");
-
-  // Simpan state edit
-  setEditModeWithTimeout(userId, chatId, { action: "replace", code, storedIds: [], mediaGroups: new Map() });
-
+  setCommandModeWithTimeout(userId, chatId, { command: "delete", step: "code" });
   await bot.sendMessage(
     chatId,
-    `🔄 *Mode Ganti File*\n\n` +
-    `Link: \`${code}\`\n\n` +
-    `Kirimkan file pengganti \\(boleh lebih dari 1 atau album\\)\\.\n` +
-    `Ketik /done jika selesai\\.\n` +
-    `Ketik /canceledit untuk membatalkan\\.`,
-    { parse_mode: "MarkdownV2" }
+    `🗑️ *Hapus Link*\n\nKirimkan *kode link* yang ingin dihapus.\n\nKetik /cancel untuk membatalkan.`,
+    { parse_mode: "Markdown" }
   );
 });
 
-// ─── /addfile [code] ───────────────────────────────────────────────────────
-// Tambah file ke link yang sudah ada.
-bot.onText(/\/addfile(?:\s+(\S+))?/, async (msg, match) => {
+// ─── /settitle — interaktif ───────────────────────────────────────────────
+bot.onText(/\/settitle$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const code   = match[1];
 
-  if (!isAllowedToEdit(userId)) {
-    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
-  }
-
-  if (!code) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Sertakan kode link.\n\n_Contoh:_ /addfile AbCd1234",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const access = await canEditLink(code, userId);
-  if (access === "not_found") return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  if (access === "forbidden")  return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengedit link ini.");
-
-  // Tampilkan isi link saat ini
-  const raw = await getRawLink(code);
-  const currentCount = raw.type === "single" ? 1 : raw.data.ids.length;
-
-  setEditModeWithTimeout(userId, chatId, { action: "add", code, mediaGroups: new Map() });
-
+  setCommandModeWithTimeout(userId, chatId, { command: "settitle", step: "code" });
   await bot.sendMessage(
     chatId,
-    `➕ *Mode Tambah File*\n\n` +
-    `Link: \`${code}\`\n` +
-    `File saat ini: *${currentCount} file*\n\n` +
-    `Kirimkan file yang ingin ditambahkan \\(boleh album\\)\\.\n` +
-    `Ketik /done jika selesai\\.\n` +
-    `Ketik /canceledit untuk membatalkan\\.`,
-    { parse_mode: "MarkdownV2" }
+    `🏷️ *Ubah Judul Link*\n\nKirimkan *kode link* yang ingin diubah judulnya.\n\nKetik /cancel untuk membatalkan.`,
+    { parse_mode: "Markdown" }
   );
 });
 
-// ─── /removefile [code] [nomor...] ────────────────────────────────────────
-// Hapus satu atau beberapa file dari link.
-// Format: /removefile AbCd1234 2
-//         /removefile AbCd1234 1 3
-//         /removefile AbCd1234 1,3,5
-bot.onText(/\/removefile(?:\s+(\S+))?(?:\s+(.+))?/, async (msg, match) => {
-  const chatId    = msg.chat.id;
-  const userId    = msg.from.id;
-  const code      = match[1];
-  const rawNomor  = match[2] || "";
+// ─── /replace — interaktif ────────────────────────────────────────────────
+bot.onText(/\/replace$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
 
   if (!isAllowedToEdit(userId)) {
     return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
   }
 
-  if (!code) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Sertakan kode link dan nomor file.\n\n" +
-      "_Contoh hapus 1 file:_ /removefile AbCd1234 2\n" +
-      "_Contoh hapus beberapa:_ /removefile AbCd1234 1 3 5\n" +
-      "_Atau dengan koma:_ /removefile AbCd1234 1,3,5",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const access = await canEditLink(code, userId);
-  if (access === "not_found") return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  if (access === "forbidden")  return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengedit link ini.");
-
-  const raw = await getRawLink(code);
-  const ids  = raw.type === "single" ? [raw.data.id] : raw.data.ids;
-
-  // Jika nomor tidak disertakan → tampilkan daftar file
-  if (!rawNomor.trim()) {
-    let text = `📋 *Daftar File di Link* \`${code}\`\n`;
-    text += `━━━━━━━━━━━━━━━━\n`;
-    ids.forEach((id, i) => {
-      text += `*${i + 1}.* Message ID: \`${id}\`\n`;
-    });
-    text += `\nGunakan: /removefile ${code} [nomor]\n`;
-    text += `_Bisa lebih dari satu, pisah spasi atau koma_\n`;
-    text += `_Contoh: /removefile ${code} 1 3_`;
-    return bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
-  }
-
-  // Parse nomor: support spasi dan koma sebagai pemisah
-  const indexes = rawNomor
-    .split(/[\s,]+/)
-    .map(s => parseInt(s.trim()))
-    .filter(n => !isNaN(n));
-
-  if (indexes.length === 0) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Nomor file tidak valid.\n\n_Contoh: /removefile AbCd1234 1 3_",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  // Duplikat tidak diproses dua kali
-  const uniqueIndexes = [...new Set(indexes)];
-
-  const result = await removeFileFromLink(code, uniqueIndexes);
-
-  if (result.status === "not_found") {
-    return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  }
-
-  if (result.status === "out_of_range") {
-    return bot.sendMessage(
-      chatId,
-      `⚠️ Nomor tidak valid: *${result.invalid.join(", ")}*\n` +
-      `Link ini hanya punya *${result.total} file* (nomor 1–${result.total}).\n\n` +
-      `Gunakan /removefile ${code} untuk lihat daftar file.`,
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  if (result.status === "empty") {
-    return bot.sendMessage(
-      chatId,
-      `⚠️ Tidak bisa menghapus semua file — link akan jadi kosong.\n` +
-      `Gunakan /delete \`${code}\` jika ingin menghapus link sepenuhnya.`,
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const nomorLabel = uniqueIndexes.length === 1
-    ? `ke-${uniqueIndexes[0]}`
-    : `ke-${uniqueIndexes.join(", ")}`;
-
-  console.log(`[REMOVEFILE] File ${nomorLabel} dari link ${code} dihapus oleh user ${userId}`);
-
+  setCommandModeWithTimeout(userId, chatId, { command: "replace", step: "code" });
   await bot.sendMessage(
     chatId,
-    `✅ *File ${nomorLabel} berhasil dihapus!*\n\n` +
-    `Link: \`${code}\`\n` +
-    `Dihapus: *${result.removed} file*\n` +
-    `File tersisa: *${result.remaining} file*`,
+    `🔄 *Ganti File Link*\n\nKirimkan *kode link* yang ingin diganti filenya.\n\nKetik /cancel untuk membatalkan.`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+// ─── /addfile — interaktif ────────────────────────────────────────────────
+bot.onText(/\/addfile$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!isAllowedToEdit(userId)) {
+    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
+  }
+
+  setCommandModeWithTimeout(userId, chatId, { command: "addfile", step: "code" });
+  await bot.sendMessage(
+    chatId,
+    `➕ *Tambah File ke Link*\n\nKirimkan *kode link* yang ingin ditambahkan filenya.\n\nKetik /cancel untuk membatalkan.`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+// ─── /removefile — interaktif ─────────────────────────────────────────────
+bot.onText(/\/removefile$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!isAllowedToEdit(userId)) {
+    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
+  }
+
+  setCommandModeWithTimeout(userId, chatId, { command: "removefile", step: "code" });
+  await bot.sendMessage(
+    chatId,
+    `🗂️ *Hapus File dari Link*\n\nKirimkan *kode link* yang ingin dihapus filenya.\n\nKetik /cancel untuk membatalkan.`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+// ─── /linkdetail — interaktif ─────────────────────────────────────────────
+bot.onText(/\/linkdetail$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!isAllowedToEdit(userId)) {
+    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
+  }
+
+  setCommandModeWithTimeout(userId, chatId, { command: "linkdetail", step: "code" });
+  await bot.sendMessage(
+    chatId,
+    `🔍 *Detail Link*\n\nKirimkan *kode link* yang ingin dilihat detailnya.\n\nKetik /cancel untuk membatalkan.`,
     { parse_mode: "Markdown" }
   );
 });
@@ -1463,104 +1300,25 @@ bot.onText(/\/canceledit/, async (msg) => {
   await bot.sendMessage(chatId, "❌ Sesi edit dibatalkan.");
 });
 
-// ─── /linkinfo [code] (bot command) ────────────────────────────────────────
-// Tampilkan detail isi link: jumlah file, tipe, expiry, download count.
-bot.onText(/\/linkdetail(?:\s+(\S+))?/, async (msg, match) => {
+// ─── /cancel ───────────────────────────────────────────────────────────────
+bot.onText(/\/cancel$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const code   = match[1];
 
-  if (!isAllowedToEdit(userId)) {
-    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk fitur ini.");
+  if (commandMode.has(userId)) {
+    deleteCommandMode(userId);
+    return bot.sendMessage(chatId, "❌ Perintah dibatalkan.");
   }
 
-  if (!code) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Sertakan kode link.\n\n_Contoh:_ /linkdetail AbCd1234",
-      { parse_mode: "Markdown" }
-    );
+  if (!multiMode.has(userId)) {
+    return bot.sendMessage(chatId, "⚠️ Tidak ada sesi aktif yang bisa dibatalkan.");
   }
 
-  const raw = await getRawLink(code);
-  if (!raw) return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-
-  const linkData = await getLink(code);
-  const ids      = raw.type === "single" ? [raw.data.id] : raw.data.ids;
-  const expired  = linkData?.expired ? "⛔ Sudah expired" : "✅ Aktif";
-  const title    = await getLinkTitle(code);
-
-  let text = `🔍 *Detail Link* \`${code}\`\n`;
-  text += `━━━━━━━━━━━━━━━━\n`;
-  if (title) text += `🏷️ Judul: *${title}*\n`;
-  text += `📦 Tipe: ${raw.type === "single" ? "Single" : "Multi"}\n`;
-  text += `📄 Jumlah file: *${ids.length}*\n`;
-  text += `⬇️ Download: *${linkData?.download_count ?? 0}x*\n`;
-  text += `🔴 Status: ${expired}\n`;
-  text += `⏳ Expired: ${formatExpiry(linkData?.expires_at ?? null)}\n\n`;
-  text += `*Daftar File:*\n`;
-  ids.forEach((id, i) => {
-    text += `  *${i + 1}.* Message ID \`${id}\`\n`;
-  });
-  text += `\n_Edit: /replace, /addfile, /removefile_`;
-  if (title) text += `\n_Ubah judul: /settitle ${code} Judul Baru_`;
-
-  await bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
-});
-
-// ─── /settitle ─────────────────────────────────────────────────────────────
-// Set/ubah judul link. Format: /settitle [code] [judul]
-// Siapa saja pemilik link bisa pakai (bukan hanya admin).
-bot.onText(/\/settitle(?:\s+(\S+))?(?:\s+(.+))?/, async (msg, match) => {
-  const chatId  = msg.chat.id;
-  const userId  = msg.from.id;
-  const code    = match[1];
-  const title   = match[2]?.trim();
-
-  if (!code || !title) {
-    return bot.sendMessage(
-      chatId,
-      `⚠️ Format: /settitle \\[code\\] \\[judul\\]\n\n` +
-      `_Contoh:_ /settitle AbCd1234 Materi Belajar Python`,
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  // Cek link ada & milik user (atau admin)
-  const raw = await getRawLink(code);
-  if (!raw) {
-    return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  }
-
-  const isAdmin     = ADMIN_IDS.includes(userId);
-  const isWhitelist = WHITELIST_USERS.includes(userId);
-  if (raw.owner_id !== userId && !isAdmin && !isWhitelist) {
-    return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengubah judul link ini.");
-  }
-
-  // Batasi panjang judul
-  if (title.length > 100) {
-    return bot.sendMessage(chatId, "⚠️ Judul terlalu panjang. Maksimal 100 karakter.");
-  }
-
-  const result = await setLinkTitle(code, title);
-  if (result === "not_found") {
-    return bot.sendMessage(chatId, `❌ Link \`${code}\` tidak ditemukan.`, { parse_mode: "Markdown" });
-  }
-
-  console.log(`[SETTITLE] Link ${code} → judul: "${title}" oleh user ${userId}`);
-
-  await bot.sendMessage(
-    chatId,
-    `✅ *Judul berhasil diubah!*\n\n` +
-    `🔑 Link: \`${code}\`\n` +
-    `🏷️ Judul baru: *${title}*`,
-    { parse_mode: "Markdown" }
-  );
+  deleteMultiMode(userId);
+  await bot.sendMessage(chatId, "❌ Sesi multi file dibatalkan.");
 });
 
 // ─── /ban ──────────────────────────────────────────────────────────────────
-// Hanya admin. Format: /ban [user_id] [alasan opsional]
 bot.onText(/\/ban(?:\s+(\d+))?(?:\s+(.+))?/, async (msg, match) => {
   const chatId   = msg.chat.id;
   const adminId  = msg.from.id;
@@ -1602,7 +1360,6 @@ bot.onText(/\/ban(?:\s+(\d+))?(?:\s+(.+))?/, async (msg, match) => {
 });
 
 // ─── /unban ────────────────────────────────────────────────────────────────
-// Hanya admin. Format: /unban [user_id]
 bot.onText(/\/unban(?:\s+(\d+))?/, async (msg, match) => {
   const chatId   = msg.chat.id;
   const adminId  = msg.from.id;
@@ -1642,7 +1399,6 @@ bot.onText(/\/unban(?:\s+(\d+))?/, async (msg, match) => {
 });
 
 // ─── /banlist ──────────────────────────────────────────────────────────────
-// Hanya admin. Tampilkan 20 user yang diblokir terbaru.
 bot.onText(/\/banlist/, async (msg) => {
   const chatId  = msg.chat.id;
   const adminId = msg.from.id;
@@ -1680,7 +1436,6 @@ bot.onText(/\/banlist/, async (msg) => {
 });
 
 // ─── /checkban ─────────────────────────────────────────────────────────────
-// Hanya admin. Cek status ban satu user. Format: /checkban [user_id]
 bot.onText(/\/checkban(?:\s+(\d+))?/, async (msg, match) => {
   const chatId   = msg.chat.id;
   const adminId  = msg.from.id;
@@ -1733,12 +1488,11 @@ bot.onText(/\/multi/, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk menggunakan bot ini.");
   }
 
-  // [TITIK 4] Rate limit: max 100 sesi multi per jam per user
   const multiLimit = checkBotLimit("multi", userId, 100, 3600);
   if (!multiLimit.ok) {
     return bot.sendMessage(
       chatId,
-      `⏳ *Terlalu banyak sesi multi file!*\n\nCoba lagi dalam *${formatTimeLeft(multiLimit.retryAfter)}*.\n\n_Maksimal 5 sesi per jam._`,
+      `⏳ *Terlalu banyak sesi multi file!*\n\nCoba lagi dalam *${formatTimeLeft(multiLimit.retryAfter)}*.`,
       { parse_mode: "Markdown" }
     );
   }
@@ -1760,12 +1514,10 @@ bot.onText(/\/done/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // ── Selesaikan sesi editMode (replace / add) ────────────────────────────
   if (editMode.has(userId)) {
     const session = editMode.get(userId);
     deleteEditMode(userId);
 
-    // REPLACE: simpan semua file yang sudah dikumpulkan
     if (session.action === "replace") {
       const ids = session.storedIds || [];
       if (ids.length === 0) {
@@ -1813,10 +1565,9 @@ bot.onText(/\/done/, async (msg) => {
       return;
     }
 
-    // ADD: konfirmasi selesai tambah file
     if (session.action === "add") {
-      const raw   = await getRawLink(session.code);
-      const total = raw ? (raw.type === "single" ? 1 : raw.data.ids.length) : 0;
+      const raw       = await getRawLink(session.code);
+      const total     = raw ? (raw.type === "single" ? 1 : raw.data.ids.length) : 0;
       const shareLink = makeShareLink(session.code);
 
       await bot.sendMessage(
@@ -1837,7 +1588,6 @@ bot.onText(/\/done/, async (msg) => {
     }
   }
 
-  // ── Selesaikan sesi multiMode (upload biasa) ────────────────────────────
   if (!multiMode.has(userId)) {
     return bot.sendMessage(chatId, "⚠️ Kamu tidak sedang dalam mode multi file.\nKetik /multi untuk memulai.");
   }
@@ -1869,7 +1619,7 @@ bot.onText(/\/done/, async (msg) => {
       `🔑 Kode: \`${code}\`\n` +
       `🔗 *Link Share:*\n\`${shareLink}\`\n\n` +
       `⏳ Expired: ${expireDays > 0 ? `${expireDays} hari` : "Tidak ada"}\n\n` +
-      `_Ubah judul: /settitle ${code} Judul Baru_\n` +
+      `_Ubah judul: /settitle_\n` +
       `_Penerima perlu membuka iklan sebelum mengakses file._`,
       {
         parse_mode: "Markdown",
@@ -1888,20 +1638,6 @@ bot.onText(/\/done/, async (msg) => {
   }
 });
 
-// ─── /cancel ───────────────────────────────────────────────────────────────
-// Regex exact: /cancel$ agar tidak ikut menangkap /canceledit
-bot.onText(/\/cancel$/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!multiMode.has(userId)) {
-    return bot.sendMessage(chatId, "⚠️ Tidak ada sesi aktif yang bisa dibatalkan.");
-  }
-
-  deleteMultiMode(userId);
-  await bot.sendMessage(chatId, "❌ Sesi multi file dibatalkan.");
-});
-
 // ─── CALLBACK QUERY ────────────────────────────────────────────────────────
 bot.on("callback_query", async (query) => {
   if (query.data === "noop") {
@@ -1909,7 +1645,7 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-// ─── HANDLER PESAN (upload file) ───────────────────────────────────────────
+// ─── HANDLER PESAN (upload file + commandMode) ─────────────────────────────
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -1921,26 +1657,203 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk menggunakan bot ini.");
   }
 
-  // Cek blacklist
   if (!ADMIN_IDS.includes(userId) && await isBlacklisted(userId)) {
     return bot.sendMessage(chatId, "⛔ Akun kamu telah diblokir dari bot ini.");
   }
 
-  const mediaType = getMediaType(msg);
-  if (!mediaType) {
-    return bot.sendMessage(
-      chatId,
-      "ℹ️ Kirimkan *file, foto, video, audio, atau dokumen*.",
-      { parse_mode: "Markdown" }
-    );
+  // ── MODE COMMAND INTERAKTIF ────────────────────────────────────────────
+  if (commandMode.has(userId) && msg.text) {
+    const session = commandMode.get(userId);
+    const text    = msg.text.trim();
+
+    // ── STEP 1: Terima kode ──────────────────────────────────────────────
+    if (session.step === "code") {
+      const code = text;
+
+      // Cek link ada
+      const raw = await getRawLink(code);
+      if (!raw) {
+        return bot.sendMessage(
+          chatId,
+          `❌ *Kode tidak ditemukan!*\n\nLink dengan kode \`${code}\` tidak ada.\nKirimkan kode yang benar atau ketik /cancel untuk membatalkan.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      const cmd = session.command;
+
+      // ── linkdetail: langsung tampilkan ──────────────────────────────
+      if (cmd === "linkdetail") {
+        deleteCommandMode(userId);
+        const detailText = await buildLinkDetailText(code);
+        return bot.sendMessage(chatId, detailText, { parse_mode: "Markdown" });
+      }
+
+      // ── delete: cek izin lalu hapus ─────────────────────────────────
+      if (cmd === "delete") {
+        deleteCommandMode(userId);
+        const result = await deleteLink(code, userId);
+        const messages = {
+          deleted:   `✅ Link \`${code}\` berhasil dihapus.`,
+          not_found: `❌ Link \`${code}\` tidak ditemukan.`,
+          forbidden: `⛔ Kamu tidak memiliki izin untuk menghapus link ini.`,
+        };
+        return bot.sendMessage(chatId, messages[result] || "❌ Terjadi kesalahan.", { parse_mode: "Markdown" });
+      }
+
+      // ── Cek izin edit untuk perintah lainnya ────────────────────────
+      const access = await canEditLink(code, userId);
+      if (access === "forbidden") {
+        deleteCommandMode(userId);
+        return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengedit link ini.");
+      }
+
+      // ── settitle: minta judul ────────────────────────────────────────
+      if (cmd === "settitle") {
+        const isAdmin     = ADMIN_IDS.includes(userId);
+        const isWhitelist = WHITELIST_USERS.includes(userId);
+        if (raw.owner_id !== userId && !isAdmin && !isWhitelist) {
+          deleteCommandMode(userId);
+          return bot.sendMessage(chatId, "⛔ Kamu tidak memiliki izin untuk mengubah judul link ini.");
+        }
+        const currentTitle = await getLinkTitle(code);
+        setCommandModeWithTimeout(userId, chatId, { command: "settitle", step: "title", code });
+        return bot.sendMessage(
+          chatId,
+          `✅ *Kode ditemukan!*\n\n🔑 Link: \`${code}\`\n` +
+          (currentTitle ? `🏷️ Judul sekarang: *${currentTitle}*\n` : "") +
+          `\nKirimkan *judul baru* untuk link ini.\n\nKetik /cancel untuk membatalkan.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      // ── replace: masuk editMode ──────────────────────────────────────
+      if (cmd === "replace") {
+        deleteCommandMode(userId);
+        setEditModeWithTimeout(userId, chatId, { action: "replace", code, storedIds: [], mediaGroups: new Map() });
+        return bot.sendMessage(
+          chatId,
+          `✅ *Kode ditemukan!*\n\n🔄 *Mode Ganti File*\nLink: \`${code}\`\n\n` +
+          `Kirimkan file pengganti (boleh lebih dari 1 atau album).\n` +
+          `Ketik /done jika selesai.\nKetik /canceledit untuk membatalkan.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      // ── addfile: masuk editMode ──────────────────────────────────────
+      if (cmd === "addfile") {
+        deleteCommandMode(userId);
+        const currentCount = raw.type === "single" ? 1 : raw.data.ids.length;
+        setEditModeWithTimeout(userId, chatId, { action: "add", code, mediaGroups: new Map() });
+        return bot.sendMessage(
+          chatId,
+          `✅ *Kode ditemukan!*\n\n➕ *Mode Tambah File*\nLink: \`${code}\`\nFile saat ini: *${currentCount} file*\n\n` +
+          `Kirimkan file yang ingin ditambahkan (boleh album).\n` +
+          `Ketik /done jika selesai.\nKetik /canceledit untuk membatalkan.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      // ── removefile: tampilkan daftar, minta nomor ────────────────────
+      if (cmd === "removefile") {
+        const ids2 = raw.type === "single" ? [raw.data.id] : raw.data.ids;
+        setCommandModeWithTimeout(userId, chatId, { command: "removefile", step: "indexes", code });
+        let listText = `✅ *Kode ditemukan!*\n\n📋 *Daftar File di Link* \`${code}\`\n━━━━━━━━━━━━━━━━\n`;
+        ids2.forEach((id, i) => { listText += `*${i + 1}.* Message ID: \`${id}\`\n`; });
+        listText += `\nKirimkan *nomor file* yang ingin dihapus.\n`;
+        listText += `_Bisa lebih dari satu, pisah spasi atau koma_\n`;
+        listText += `_Contoh: 1 atau 1,3 atau 1 3_\n\nKetik /cancel untuk membatalkan.`;
+        return bot.sendMessage(chatId, listText, { parse_mode: "Markdown" });
+      }
+    }
+
+    // ── STEP 2: Terima judul (settitle) ─────────────────────────────────
+    if (session.step === "title" && session.command === "settitle") {
+      const title = text;
+      if (title.length > 100) {
+        return bot.sendMessage(
+          chatId,
+          "⚠️ Judul terlalu panjang. Maksimal 100 karakter. Kirim ulang judul yang lebih pendek."
+        );
+      }
+      deleteCommandMode(userId);
+      await setLinkTitle(session.code, title);
+      console.log(`[SETTITLE] Link ${session.code} → judul: "${title}" oleh user ${userId}`);
+      return bot.sendMessage(
+        chatId,
+        `✅ *Judul berhasil diubah!*\n\n🔑 Link: \`${session.code}\`\n🏷️ Judul baru: *${title}*`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    // ── STEP 2: Terima nomor (removefile) ───────────────────────────────
+    if (session.step === "indexes" && session.command === "removefile") {
+      const indexes = text.split(/[\s,]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      if (indexes.length === 0) {
+        return bot.sendMessage(
+          chatId,
+          "⚠️ Nomor tidak valid. Kirim ulang nomor file.\n_Contoh: 1 atau 1,3_",
+          { parse_mode: "Markdown" }
+        );
+      }
+      const uniqueIndexes = [...new Set(indexes)];
+      const result = await removeFileFromLink(session.code, uniqueIndexes);
+
+      if (result.status === "out_of_range") {
+        return bot.sendMessage(
+          chatId,
+          `⚠️ Nomor tidak valid: *${result.invalid.join(", ")}*\n` +
+          `Link ini hanya punya *${result.total} file*. Kirim ulang nomor yang benar.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+      if (result.status === "empty") {
+        deleteCommandMode(userId);
+        return bot.sendMessage(
+          chatId,
+          `⚠️ Tidak bisa menghapus semua file.\nGunakan /delete jika ingin menghapus link sepenuhnya.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      deleteCommandMode(userId);
+      const nomorLabel = uniqueIndexes.length === 1
+        ? `ke-${uniqueIndexes[0]}`
+        : `ke-${uniqueIndexes.join(", ")}`;
+      console.log(`[REMOVEFILE] File ${nomorLabel} dari link ${session.code} dihapus oleh user ${userId}`);
+      return bot.sendMessage(
+        chatId,
+        `✅ *File ${nomorLabel} berhasil dihapus!*\n\n` +
+        `Link: \`${session.code}\`\n` +
+        `Dihapus: *${result.removed} file*\n` +
+        `File tersisa: *${result.remaining} file*`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    return; // Jangan proses lebih lanjut jika sedang dalam commandMode
   }
 
-  // [TITIK 5] Rate limit: max 100 upload per jam per user
+  // ── MODE EDIT LINK ─────────────────────────────────────────────────────
+  const mediaType = getMediaType(msg);
+
+  if (!mediaType) {
+    // Hanya kirim pesan error jika tidak dalam mode apapun
+    if (!editMode.has(userId) && !multiMode.has(userId)) {
+      return bot.sendMessage(
+        chatId,
+        "ℹ️ Kirimkan *file, foto, video, audio, atau dokumen*.",
+        { parse_mode: "Markdown" }
+      );
+    }
+    return;
+  }
+
   const uploadLimit = checkBotLimit("upload", userId, 100, 3600);
   if (!uploadLimit.ok) {
     return bot.sendMessage(
       chatId,
-      `⏳ *Batas upload tercapai!*\n\nKamu bisa upload lagi dalam *${formatTimeLeft(uploadLimit.retryAfter)}*.\n\n_Maksimal 20 file per jam._`,
+      `⏳ *Batas upload tercapai!*\n\nKamu bisa upload lagi dalam *${formatTimeLeft(uploadLimit.retryAfter)}*.`,
       { parse_mode: "Markdown" }
     );
   }
@@ -1952,14 +1865,10 @@ bot.on("message", async (msg) => {
   };
   const emoji = mediaEmoji[mediaType] || "📁";
 
-  // ── MODE EDIT LINK ───────────────────────────────────────────────────────
   if (editMode.has(userId)) {
     const session = editMode.get(userId);
 
-    // ── REPLACE: support multi file via album, selesai dengan /done ──────────
     if (session.action === "replace") {
-
-      // Tangani album (media_group)
       if (msg.media_group_id) {
         const groupId = msg.media_group_id;
         if (!session.mediaGroups) session.mediaGroups = new Map();
@@ -1980,46 +1889,34 @@ bot.on("message", async (msg) => {
               session.storedIds.push(storedId);
             }
             await bot.editMessageText(
-              `✅ *${group.msgs.length} file* dari album ditambahkan!\n` +
-              `📦 Total: *${session.storedIds.length} file*\n\n` +
-              `_Kirim file lagi atau ketik /done jika selesai._`,
+              `✅ *${group.msgs.length} file* dari album ditambahkan!\n📦 Total: *${session.storedIds.length} file*\n\n_Kirim file lagi atau ketik /done jika selesai._`,
               { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: "Markdown" }
             );
           } catch (err) {
             console.error("Error forward album replace:", err.message);
-            await bot.editMessageText("❌ Gagal memproses album.", {
-              chat_id: chatId, message_id: processingMsg.message_id,
-            });
+            await bot.editMessageText("❌ Gagal memproses album.", { chat_id: chatId, message_id: processingMsg.message_id });
           }
         }, 1500);
         return;
       }
 
-      // File tunggal
       if (!session.storedIds) session.storedIds = [];
       const processingMsg = await bot.sendMessage(chatId, "⏳ Memproses file...");
       try {
         const storedId = await forwardToStorage(chatId, msg.message_id);
         session.storedIds.push(storedId);
         await bot.editMessageText(
-          `${emoji} *File ke-${session.storedIds.length} diterima!*\n\n` +
-          `🔑 Link: \`${session.code}\`\n\n` +
-          `_Kirim file lagi atau ketik /done jika selesai._`,
+          `${emoji} *File ke-${session.storedIds.length} diterima!*\n\n🔑 Link: \`${session.code}\`\n\n_Kirim file lagi atau ketik /done jika selesai._`,
           { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: "Markdown" }
         );
       } catch (err) {
         console.error("Error forward file replace:", err.message);
-        await bot.editMessageText("❌ Gagal memproses file.", {
-          chat_id: chatId, message_id: processingMsg.message_id,
-        });
+        await bot.editMessageText("❌ Gagal memproses file.", { chat_id: chatId, message_id: processingMsg.message_id });
       }
       return;
     }
 
-    // ── ADD: tambah file, mode tetap aktif sampai /done ─────────────────────
     if (session.action === "add") {
-
-      // Tangani album (media_group)
       if (msg.media_group_id) {
         const groupId = msg.media_group_id;
         if (!session.mediaGroups) session.mediaGroups = new Map();
@@ -2040,46 +1937,36 @@ bot.on("message", async (msg) => {
               totalFiles = await addFileToLink(session.code, storedId);
             }
             await bot.editMessageText(
-              `✅ *${group.msgs.length} file* dari album ditambahkan!\n` +
-              `📦 Total file sekarang: *${totalFiles}*\n\n` +
-              `_Kirim file lagi atau ketik /done jika selesai._`,
+              `✅ *${group.msgs.length} file* dari album ditambahkan!\n📦 Total file sekarang: *${totalFiles}*\n\n_Kirim file lagi atau ketik /done jika selesai._`,
               { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: "Markdown" }
             );
-            console.log(`[ADDFILE] Album ${group.msgs.length} file ke link ${session.code} oleh user ${userId}, total: ${totalFiles}`);
+            console.log(`[ADDFILE] Album ${group.msgs.length} file ke link ${session.code}, total: ${totalFiles}`);
           } catch (err) {
             console.error("Error forward album addfile:", err.message);
-            await bot.editMessageText("❌ Gagal memproses album.", {
-              chat_id: chatId, message_id: processingMsg.message_id,
-            });
+            await bot.editMessageText("❌ Gagal memproses album.", { chat_id: chatId, message_id: processingMsg.message_id });
           }
         }, 1500);
         return;
       }
 
-      // File tunggal
       const processingMsg = await bot.sendMessage(chatId, "⏳ Menambahkan file...");
       try {
         const storedId   = await forwardToStorage(chatId, msg.message_id);
         const totalFiles = await addFileToLink(session.code, storedId);
         await bot.editMessageText(
-          `${emoji} *File ditambahkan!*\n\n` +
-          `🔑 Link: \`${session.code}\`\n` +
-          `📦 Total file sekarang: *${totalFiles}*\n\n` +
-          `_Kirim file lagi atau ketik /done jika selesai._`,
+          `${emoji} *File ditambahkan!*\n\n🔑 Link: \`${session.code}\`\n📦 Total file sekarang: *${totalFiles}*\n\n_Kirim file lagi atau ketik /done jika selesai._`,
           { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: "Markdown" }
         );
-        console.log(`[ADDFILE] File ditambahkan ke link ${session.code} oleh user ${userId}, total: ${totalFiles}`);
+        console.log(`[ADDFILE] File ditambahkan ke link ${session.code}, total: ${totalFiles}`);
       } catch (err) {
         console.error("Error add file:", err.message);
-        await bot.editMessageText("❌ Gagal menambahkan file.", {
-          chat_id: chatId, message_id: processingMsg.message_id,
-        });
+        await bot.editMessageText("❌ Gagal menambahkan file.", { chat_id: chatId, message_id: processingMsg.message_id });
       }
       return;
     }
   }
 
-  // ── MODE MULTI FILE ──────────────────────────────────────────────────────
+  // ── MODE MULTI FILE ────────────────────────────────────────────────────
   if (multiMode.has(userId)) {
     const session = multiMode.get(userId);
 
@@ -2101,15 +1988,12 @@ bot.on("message", async (msg) => {
             session.storedIds.push(storedId);
           }
           await bot.editMessageText(
-            `✅ *${group.msgs.length} file* dari album ditambahkan!\n` +
-            `📦 Total: *${session.storedIds.length} file* — Ketik /done jika selesai.`,
+            `✅ *${group.msgs.length} file* dari album ditambahkan!\n📦 Total: *${session.storedIds.length} file* — Ketik /done jika selesai.`,
             { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: "Markdown" }
           );
         } catch (err) {
           console.error("Error forward album:", err.message);
-          await bot.editMessageText("❌ Gagal memproses album.", {
-            chat_id: chatId, message_id: processingMsg.message_id,
-          });
+          await bot.editMessageText("❌ Gagal memproses album.", { chat_id: chatId, message_id: processingMsg.message_id });
         }
       }, 1500);
       return;
@@ -2130,7 +2014,7 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // ── SINGLE FILE ──────────────────────────────────────────────────────────
+  // ── SINGLE FILE ────────────────────────────────────────────────────────
   const loadingMsg = await bot.sendMessage(chatId, "⏳ Sedang memproses file...");
 
   try {
@@ -2143,9 +2027,8 @@ bot.on("message", async (msg) => {
       (msg.sticker?.emoji ? `Sticker ${msg.sticker.emoji}` : null) ||
       (mediaType.charAt(0).toUpperCase() + mediaType.slice(1));
 
-    // Simpan title default dari nama file
-    const code      = await saveLink({ type: "single", id: storedMessageId }, userId, fileName);
-    const shareLink = makeShareLink(code);
+    const code       = await saveLink({ type: "single", id: storedMessageId }, userId, fileName);
+    const shareLink  = makeShareLink(code);
     const expireDays = parseInt(process.env.LINK_EXPIRE_DAYS) || 0;
 
     await bot.deleteMessage(chatId, loadingMsg.message_id);
@@ -2157,7 +2040,7 @@ bot.on("message", async (msg) => {
       `🔑 *Kode:* \`${code}\`\n` +
       `⏳ *Expired:* ${expireDays > 0 ? `${expireDays} hari` : "Tidak ada"}\n\n` +
       `🔗 *Link Share:*\n\`${shareLink}\`\n\n` +
-      `_Ubah judul: /settitle ${code} Judul Baru_\n` +
+      `_Ubah judul: /settitle_\n` +
       `_Penerima perlu membuka iklan sebelum mengakses file._`,
       {
         parse_mode: "Markdown",
@@ -2178,8 +2061,6 @@ bot.on("message", async (msg) => {
 });
 
 bot.on("polling_error", (err) => {
-  // 409 = instance lain masih jalan (Railway rolling deploy)
-  // Stop polling dan retry setelah 5 detik
   if (err.message.includes("409")) {
     console.warn("⚠️  409 Conflict — instance lain masih aktif, retry 5 detik lagi...");
     isPolling = false;
@@ -2202,17 +2083,13 @@ initDB()
       console.log(`🔗 Backend URL: ${WEBAPP_BACKEND_URL}`);
       console.log(`📱 WebApp URL: ${WEBAPP_URL}`);
     });
-    // Mulai polling setelah DB siap
     startPolling();
 
-    // ── Cleanup job: hapus session & link expired setiap 1 jam ──────────────
     setInterval(async () => {
       try {
-        // Hanya hapus session yang tidak selesai (belum verified & sudah expired)
         const r1 = await pool.query(
           "DELETE FROM ad_sessions WHERE expires_at < NOW() AND verified = FALSE"
         );
-        // Hapus link expired
         const r2 = await pool.query(
           "DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at < NOW()"
         );
@@ -2223,7 +2100,7 @@ initDB()
       } catch (err) {
         console.error("[CLEANUP] Error:", err.message);
       }
-    }, 60 * 60 * 1000); // setiap 1 jam
+    }, 60 * 60 * 1000);
   })
   .catch((err) => {
     console.error("❌ Gagal koneksi database:", err.message);
